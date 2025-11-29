@@ -2,6 +2,8 @@ Pre-change coverage snapshot (legacy tests only)
 
 - covered_lines_absolute: 20
 - covered_lines_relative: 0.0363%
+- branch_coverage_relative: 7.79%
+- function_coverage_relative: 6.49%
 - total_lines: 55,165
 
 Findings

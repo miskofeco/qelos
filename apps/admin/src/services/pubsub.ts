@@ -18,7 +18,7 @@ let instance: PubSubService | null = null;
  * PubSub service class
  */
 export class PubSubService {
-  private subscriptions: Subscription[] = [];
+  private subscriptionsByEvent: Map<string, Subscription[]> = new Map();
 
   /**
    * Subscribe to an event
@@ -28,7 +28,9 @@ export class PubSubService {
    */
   subscribe(event: string, callback: Callback): () => void {
     const subscription: Subscription = { event, callback, once: false };
-    this.subscriptions.push(subscription);
+    const list = this.subscriptionsByEvent.get(event) ?? [];
+    list.push(subscription);
+    this.subscriptionsByEvent.set(event, list);
 
     // Return unsubscribe function
     return () => {
@@ -44,7 +46,9 @@ export class PubSubService {
    */
   once(event: string, callback: Callback): () => void {
     const subscription: Subscription = { event, callback, once: true };
-    this.subscriptions.push(subscription);
+    const list = this.subscriptionsByEvent.get(event) ?? [];
+    list.push(subscription);
+    this.subscriptionsByEvent.set(event, list);
 
     // Return unsubscribe function
     return () => {
@@ -57,9 +61,14 @@ export class PubSubService {
    * @param subscription - Subscription object
    */
   private unsubscribe(subscription: Subscription): void {
-    const index = this.subscriptions.indexOf(subscription);
+    const list = this.subscriptionsByEvent.get(subscription.event);
+    if (!list) return;
+    const index = list.indexOf(subscription);
     if (index !== -1) {
-      this.subscriptions.splice(index, 1);
+      list.splice(index, 1);
+    }
+    if (list.length === 0) {
+      this.subscriptionsByEvent.delete(subscription.event);
     }
   }
 
@@ -70,12 +79,13 @@ export class PubSubService {
    * @returns Promise that resolves when all subscribers have completed
    */
   async publish(event: string, ...args: any[]): Promise<any> {
-    const subscriptions = this.subscriptions.filter(
-      (subscription) => subscription.event === event
-    );
+    const subscriptions = this.subscriptionsByEvent.get(event);
+    if (!subscriptions || subscriptions.length === 0) {
+      return;
+    }
 
     // Create an array of promises from all subscriber callbacks
-    const callbackPromises = subscriptions.map(async (subscription) => {
+    const callbackPromises = [...subscriptions].map(async (subscription) => {
       try {
         // Execute the callback and handle both synchronous and asynchronous results
         const result = subscription.callback(...args);
@@ -98,11 +108,9 @@ export class PubSubService {
    */
   clear(event?: string): void {
     if (event) {
-      this.subscriptions = this.subscriptions.filter(
-        (subscription) => subscription.event !== event
-      );
+      this.subscriptionsByEvent.delete(event);
     } else {
-      this.subscriptions = [];
+      this.subscriptionsByEvent.clear();
     }
   }
 
@@ -111,7 +119,7 @@ export class PubSubService {
    * @returns Array of active event names
    */
   getActiveEvents(): string[] {
-    return [...new Set(this.subscriptions.map((sub) => sub.event))];
+    return Array.from(this.subscriptionsByEvent.keys());
   }
 }
 

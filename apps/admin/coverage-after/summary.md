@@ -2,6 +2,8 @@ Post-change coverage snapshot (all tests including new additions)
 
 - covered_lines_absolute: 212
 - covered_lines_relative: 0.3825%
+- branch_coverage_relative: 17.69%
+- function_coverage_relative: 12.16%
 - total_lines: 55,432
 
 What changed

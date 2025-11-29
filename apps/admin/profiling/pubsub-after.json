@@ -1,0 +1,7 @@
+{
+  "iterations": 20000,
+  "eventsCount": 50,
+  "listenersPerEvent": 20,
+  "total_wall_time_ms": 62.168750000000045,
+  "avg_us_per_publish": 3.108437500000002
+}
