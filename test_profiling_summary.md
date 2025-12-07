@@ -31,8 +31,8 @@ We added targeted unit tests around previously under-tested logic:
 
 - Covered lines (absolute): 212  
 - Covered lines (relative): 0.3825%  
-- Branch coverage: 17.69%  
-- Function coverage: 12.16%  
+- Branch coverage: 17.47%  
+- Function coverage: 12.04%  
 - Improvement:
   - +192 covered lines
   - Covered lines (relative): +0.3462%  
