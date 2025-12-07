@@ -63,14 +63,14 @@ watch(() => appConfig.value.language, async (language) => {
 watch(() => {
   const cssUrl = appConfig.value.themeStylesUrl;
   const palette = appConfig.value.colorsPalette;
-  const borderRadius = appConfig.value.borderRadius;
-  const baseFontSize = appConfig.value.baseFontSize;
-  const fontFamily = appConfig.value.fontFamily;
-  const headingsFontFamily = appConfig.value.headingsFontFamily;
-  const buttonRadius = appConfig.value.buttonRadius;
-  const spacing = appConfig.value.spacing;
-  const shadowStyle = appConfig.value.shadowStyle;
-  const animationSpeed = appConfig.value.animationSpeed;
+  const borderRadius = appConfig.value.borderRadius || (palette?.borderRadius) || 0;
+  const baseFontSize = appConfig.value.baseFontSize || palette?.baseFontSize || 16;
+  const fontFamily = appConfig.value.fontFamily || palette?.fontFamily || 'Arial, sans-serif';
+  const headingsFontFamily = appConfig.value.headingsFontFamily || palette?.headingsFontFamily || 'Arial, sans-serif';
+  const buttonRadius = appConfig.value.buttonRadius || palette?.buttonRadius || 0;
+  const spacing = appConfig.value.spacing || palette?.spacing || '10px';
+  const shadowStyle = appConfig.value.shadowStyle || palette?.shadowStyle || 'md';
+  const animationSpeed = appConfig.value.animationSpeed || palette?.animationSpeed || 'normal';
   return {
     cssUrl,
     palette,
@@ -109,8 +109,9 @@ watch(() => {
       --headings-font-family: ${headingsFontFamily || fontFamily || '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, "Open Sans", "Helvetica Neue", sans-serif'};
       
       /* Spacing and layout */
-      --content-spacing: ${spacing === 'compact' ? '8px' : spacing === 'comfortable' ? '24px' : '16px'};
-      --element-spacing: ${spacing === 'compact' ? '4px' : spacing === 'comfortable' ? '12px' : '8px'};
+      --spacing: ${spacing?.includes('px') ? spacing : spacing === 'compact' ? '4px' : spacing === 'comfortable' ? '12px' : '8px'};
+      --content-spacing: ${spacing?.includes('px') ? spacing : spacing === 'compact' ? '8px' : spacing === 'comfortable' ? '24px' : '16px'};
+      --element-spacing: var(--spacing);
       
       /* Animation */
       --transition-speed: ${typeof animationSpeed === 'number' ? animationSpeed : 300}ms;

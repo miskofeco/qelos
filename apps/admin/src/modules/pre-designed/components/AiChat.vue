@@ -10,7 +10,7 @@
   >
     <div class="chat-window" ref="chatWindow">
       <div v-if="messages.length === 0" class="ai-initial-message">
-        <slot v-if="$slots.initialMessage" name="initialMessage" />
+        <slot v-if="$slots.initialMessage || $slots['initial-message']" name="initialMessage" :setInput="onSuggestionClick" :input="input" />
         <template v-else>
           <div class="ai-initial-title">
             {{ $t(title || "🤖 I'm your AI assistant") }}
@@ -92,12 +92,20 @@
             <div class="bubble-header">
               <span class="avatar">
                 <el-icon v-if="msg.role === 'user'"><UserFilled /></el-icon>
-                <el-icon v-else><Cpu /></el-icon>
+                <font-awesome-icon v-else :icon="['fas', 'robot']" />
               </span>
-              <span class="meta"
-                >{{ msg.role === "user" ? "You" : "AI" }} ·
-                {{ formatTime(msg.time) }}</span
-              >
+              <div class="meta">
+                <span class="meta-text">{{ msg.role === "user" ? "You" : "AI" }} ·
+                {{ formatTime(msg.time) }}</span>
+                <span
+                  v-if="msg.status && msg.role === 'user'"
+                  class="message-status"
+                  :class="msg.status"
+                  aria-label="Message status"
+                >
+                  <font-awesome-icon :icon="['fas', msg.status === 'sent' ? 'check' : 'clock']" />
+                </span>
+              </div>
               <div
                 class="copy-button"
                 @click="copyMessage(msg)"
@@ -122,7 +130,15 @@
         </template>
       </transition-group>
       <div v-if="loading" class="stream-indicator">
-        <el-icon class="spin"><Loading /></el-icon> {{ $t(typingText || "AI is typing...") }}
+        <div class="typing-pill">
+          <el-icon class="spin"><Loading /></el-icon>
+          <span class="typing-text">{{ $t(typingText || "AI is typing") }}</span>
+          <span class="typing-dots" aria-hidden="true">
+            <span></span>
+            <span></span>
+            <span></span>
+          </span>
+        </div>
       </div>
     </div>
     <transition name="fade">
@@ -154,7 +170,7 @@
     <slot
       v-if="$slots['user-input']"
       name="user-input"
-      :send="onSend"
+      :send="send"
       :input="input"
       :update-input="(value: string) => input = value"
       :loading="loading"
@@ -164,8 +180,19 @@
       :input-ref="inputRef"
       :on-input-enter="onInputEnter"
     />
-    <form v-else class="input-row" @submit.prevent="onSend">
+    <form v-else class="input-row" @submit.prevent="send">
       <div class="input-group">
+        <div class="input-rail">
+          <button type="button" class="rail-btn" :disabled="loading" @click="openFilePicker" :title="$t('Attach files')">
+            <font-awesome-icon :icon="['fas', 'paperclip']" />
+          </button>
+          <button type="button" class="rail-btn" :disabled="loading" @click="insertTemplatePrompt" :title="$t('Insert template prompt')">
+            <font-awesome-icon :icon="['fas', 'lightbulb']" />
+          </button>
+          <button type="button" class="rail-btn" :disabled="loading" @click="insertSlashCommand" :title="$t('Slash command')">
+            /
+          </button>
+        </div>
         <el-input
           v-model="input"
           type="textarea"
@@ -207,7 +234,6 @@ import {
   Document,
   Loading,
   UserFilled,
-  Cpu,
   DocumentCopy,
   Check,
   ArrowRight,
@@ -216,6 +242,7 @@ import {
 import { Remarkable } from "remarkable";
 import threadsService from "@/services/apis/threads-service";
 import { linkify } from "remarkable/linkify";
+import { isAdmin, isLoadingDataAsUser } from "@/modules/core/store/auth";
 
 const props = defineProps<{
   url: string;
@@ -228,6 +255,7 @@ const props = defineProps<{
   suggestions?: Array<string | { label: string; text?: string; icon?: string }>;
   fullScreen?: boolean;
   typingText?: string;
+  manager?: boolean;
 }>();
 
 const emit = defineEmits([
@@ -237,9 +265,24 @@ const emit = defineEmits([
   "message-received",
   "function-executed",
   "update:threadId",
+  "mounted"
 ]);
 
 const localThreadId = ref(props.threadId);
+
+const templatePromptPool = computed(() => {
+  const prompts: string[] = [];
+  if (props.chatContext?.currentPage) {
+    prompts.push(
+      `Review and enhance the layout of ${props.chatContext.currentPage}.`
+    );
+  }
+  prompts.push(
+    "Summarize the last AI response into actionable steps.",
+    "Suggest the next best action for our current workflow."
+  );
+  return prompts;
+});
 
 const shouldRecordThread = computed(() => props.recordThread || props.threadId);
 
@@ -277,6 +320,7 @@ interface ChatMessage {
   time: string;
   type: "text" | "file";
   filename?: string;
+  status?: "sending" | "sent";
 }
 
 interface AttachedFile {
@@ -316,6 +360,7 @@ const hoveredSuggestion = ref<number | null>(null);
 
 // Reference to markdown content elements
 const markdownContent = ref<HTMLElement[]>([]);
+const templatePromptIndex = ref(0);
 
 // Function to add copy buttons to tables
 function addTableCopyButtons() {
@@ -396,7 +441,7 @@ function onInputEnter(e: KeyboardEvent) {
   // Enter (no Ctrl/Cmd): send. Ctrl+Enter or Cmd+Enter: newline
   if (e.key === "Enter" && !e.shiftKey && !(e.ctrlKey || e.metaKey)) {
     e.preventDefault();
-    onSend();
+    send();
   }
   // Otherwise (Ctrl+Enter/Cmd+Enter), allow default (newline)
 }
@@ -516,6 +561,14 @@ function addMessage(msg: Omit<ChatMessage, "id" | "time">) {
   });
 }
 
+function markUserMessagesAsSent() {
+  messages.forEach((msg, index) => {
+    if (msg.role === "user" && msg.status === "sending") {
+      messages[index] = { ...msg, status: "sent" };
+    }
+  });
+}
+
 function onFileDrop(e: DragEvent) {
   dropActive.value = false;
   const files = Array.from(e.dataTransfer?.files || []);
@@ -564,7 +617,30 @@ function onSuggestionClick(
   inputRef.value?.focus();
 }
 
-async function onSend() {
+function openFilePicker() {
+  fileInputRef.value?.click();
+}
+
+function insertTemplatePrompt() {
+  if (!templatePromptPool.value.length) return;
+  const prompt =
+    templatePromptPool.value[templatePromptIndex.value % templatePromptPool.value.length];
+  templatePromptIndex.value += 1;
+  input.value = prompt;
+  inputRef.value?.focus();
+}
+
+function insertSlashCommand() {
+  if (!input.value.startsWith("/")) {
+    input.value = "/" + input.value.trimStart();
+  }
+  if (!input.value.endsWith(" ")) {
+    input.value += " ";
+  }
+  inputRef.value?.focus();
+}
+
+async function send() {
   if (!canSend()) return;
   for (const file of attachedFiles) {
     addMessage({
@@ -572,9 +648,10 @@ async function onSend() {
       content: file.content,
       type: "file",
       filename: file.name,
+      status: "sending",
     });
   }
-  addMessage({ role: "user", content: input.value.trim(), type: "text" });
+  addMessage({ role: "user", content: input.value.trim(), type: "text", status: "sending" });
   const payload = {
     messages: messages.map((m) => ({
       role: m.role,
@@ -599,7 +676,12 @@ async function onSend() {
       await createThread();
     }
     // Streaming with fetch (SSE-style JSON lines)
-    const res = await fetch(chatCompletionUrl.value + "?stream=true", {
+    const url = new URL(chatCompletionUrl.value, window.location.origin);
+    url.searchParams.append("stream", "true");
+    if (isAdmin.value && isLoadingDataAsUser.value && !props.manager) {
+      url.searchParams.append("bypassAdmin", "true");
+    }
+    const res = await fetch(url.toString(), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
@@ -673,6 +755,7 @@ async function onSend() {
       }
     }
     loading.value = false;
+    markUserMessagesAsSent();
     // Only add table copy buttons after the assistant has finished typing
     nextTick(() => {
       setTimeout(addTableCopyButtons, 100);
@@ -680,7 +763,12 @@ async function onSend() {
   } catch (err) {
     // Fallback to HTTP
     try {
-      const res = await fetch(props.url + "?stream=false", {
+      const url = new URL(props.url, window.location.origin);
+      url.searchParams.append("stream", "false");
+      if (isAdmin.value && isLoadingDataAsUser.value && !props.manager) {
+        url.searchParams.append("bypassAdmin", "true");
+      }
+      const res = await fetch(url.toString(), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
@@ -691,6 +779,7 @@ async function onSend() {
       aiMsg.content = "[Error: failed to fetch AI response]";
     }
     loading.value = false;
+    markUserMessagesAsSent();
     // Only add table copy buttons after the assistant has finished typing
     nextTick(() => {
       setTimeout(addTableCopyButtons, 100);
@@ -709,6 +798,21 @@ onMounted(() => {
   }
   // Initialize table copy buttons for any existing content
   setTimeout(addTableCopyButtons, 100);
+
+  emit('mounted', {
+    input,
+    messages,
+    threadId: localThreadId,
+    chatWindow,
+    inputRef,
+    loading,
+    chatCompletionUrl,
+    createThread,
+    addMessage,
+    send,
+    renderMarkdown,
+    openFilePicker
+  });
 });
 </script>
 
@@ -718,16 +822,25 @@ onMounted(() => {
   flex-direction: column;
   height: 100%;
   width: 100%;
-  background: var(--body-bg, #fff);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(247, 249, 255, 0.92));
   border-radius: var(--border-radius, 18px);
-  box-shadow: var(--box-shadow, 0 4px 32px 0 rgba(0, 0, 0, 0.07));
-  border: 1.5px solid var(--border-color, #e3e7ee);
+  box-shadow: 0 12px 40px rgba(22, 34, 71, 0.08);
+  border: 1px solid rgba(113, 128, 150, 0.12);
   overflow: hidden;
   padding: 0;
   position: relative;
   min-height: 400px;
   max-height: calc(100vh - var(--header-height));
   font-family: var(--font-family, inherit);
+}
+
+.ai-chat::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle at top, rgba(64, 158, 255, 0.18), transparent 45%);
+  pointer-events: none;
+  opacity: 0.6;
 }
 
 .ai-chat[full] {
@@ -737,12 +850,17 @@ onMounted(() => {
 .chat-window {
   flex: 1;
   overflow-y: auto;
-  padding: 1.25rem;
-  background: #f9f9fb;
+  padding: 1.5rem;
+  background: linear-gradient(180deg, rgba(250, 251, 255, 0.6), rgba(244, 246, 252, 0.9));
   min-height: 320px;
   max-height: 100%;
   transition: background 0.2s;
   position: relative;
+}
+
+.chat-window > div {
+  display: flex;
+  flex-direction: column;
 }
 
 
@@ -767,9 +885,9 @@ onMounted(() => {
 .input-row {
   display: flex;
   gap: 0.5em;
-  padding: 1em;
-  background: var(--body-bg, #fff);
-  border-top: 1px solid var(--border-color, #eee);
+  padding: 1.2em 1.5em;
+  background: rgba(255, 255, 255, 0.95);
+  border-top: 1px solid rgba(17, 24, 39, 0.08);
   transition: transform 0.3s ease, margin-top 0.3s ease;
 }
 
@@ -803,8 +921,8 @@ onMounted(() => {
   width: 100%;
   min-height: 44px !important;
   border-radius: var(--border-radius, 16px) !important;
-  border: 1.5px solid var(--border-color, #e3e7ee) !important;
-  background: var(--inputs-bg-color, #f7fafd) !important;
+  border: 1px solid rgba(113, 128, 150, 0.25) !important;
+  background: var(--inputs-bg-color, #fdfefe) !important;
   box-shadow: none !important;
   font-size: 1em;
   color: var(--text-color, #222);
@@ -817,9 +935,9 @@ onMounted(() => {
 }
 
 .ai-textarea :deep(.el-textarea__inner:focus) {
-  background: var(--inputs-bg-color, #f0f7ff) !important;
-  box-shadow: 0 2px 4px 0 var(--focus-color, rgba(108, 178, 248, 0.1)) !important;
-  border: 0.5px solid var(--focus-color, #6ebfff) !important;
+  background: var(--inputs-bg-color, #f4f8ff) !important;
+  box-shadow: 0 6px 18px rgba(44, 104, 255, 0.08) !important;
+  border: 1px solid rgba(64, 158, 255, 0.6) !important;
   outline: none !important;
 }
 
@@ -882,9 +1000,9 @@ onMounted(() => {
 
 .bubble {
   margin-bottom: 1rem;
-  padding: 0.75rem 1rem;
+  padding: 0.35rem 0.55rem 0;
   border-radius: 16px;
-  background: #fff;
+  background: var(--body-bg, #fff);
   box-shadow: 0 1px 4px 0 rgba(0, 0, 0, 0.02);
   max-width: 80%;
   transition: box-shadow 0.2s, background 0.2s;
@@ -893,13 +1011,46 @@ onMounted(() => {
 
 .bubble.user {
   align-self: flex-end;
-  background: var(--el-color-primary-light-9);
-  color: var(--el-color-primary);
+  background: linear-gradient(135deg, rgba(64, 158, 255, 0.18), rgba(64, 158, 255, 0.1));
+  color: #0f172a;
 }
 
 .bubble.assistant {
   align-self: flex-start;
-  background: #fff;
+  background: #ffffff;
+  border: 1px solid rgba(15, 23, 42, 0.05);
+}
+
+.meta {
+  display: flex;
+  align-items: center;
+  gap: 0.35em;
+}
+
+.meta-text {
+  font-size: clamp(0.78rem, 1vw, 0.9rem);
+  color: #828da3;
+}
+
+.message-status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  font-size: 0.65rem;
+  border: 1px solid transparent;
+}
+
+.message-status.sending {
+  color: #f59e0b;
+  border-color: rgba(245, 158, 11, 0.3);
+}
+
+.message-status.sent {
+  color: #67c23a;
+  border-color: rgba(103, 194, 58, 0.3);
 }
 
 .bubble-header {
@@ -910,8 +1061,26 @@ onMounted(() => {
 }
 
 .avatar {
-  font-size: 1.25em;
-  margin-inline-end: 0.5em;
+  width: 26px;
+  height: 26px;
+  border-radius: 9px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.95em;
+  margin-inline-end: 0.45em;
+  box-shadow: 0 3px 8px rgba(15, 23, 42, 0.08);
+}
+
+.bubble.user .avatar {
+  background: linear-gradient(135deg, rgba(64, 158, 255, 0.95), rgba(33, 117, 226, 0.95));
+  color: #fff;
+}
+
+.bubble.assistant .avatar {
+  background: linear-gradient(135deg, rgba(239, 246, 255, 1), rgba(219, 234, 254, 1));
+  color: #305177;
+  border: 1px solid rgba(15, 23, 42, 0.06);
 }
 
 .meta {
@@ -926,15 +1095,49 @@ onMounted(() => {
 
 .stream-indicator {
   display: flex;
-  align-items: center;
-  color: var(--el-color-primary);
-  font-size: 0.95em;
+  justify-content: center;
   margin-block-start: 1em;
 }
 
+.typing-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55em;
+  padding: 0.45em 0.9em;
+  border-radius: 999px;
+  background: rgba(64, 158, 255, 0.08);
+  color: #2b3a67;
+  font-size: 0.92em;
+  border: 1px solid rgba(64, 158, 255, 0.2);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.4);
+}
+
 .stream-indicator .spin {
-  margin-inline-end: 0.5em;
+  margin-inline-end: 0.1em;
+  color: var(--el-color-primary);
   animation: spin 1s linear infinite;
+}
+
+.typing-dots {
+  display: inline-flex;
+  gap: 0.2em;
+}
+
+.typing-dots span {
+  width: 0.35em;
+  height: 0.35em;
+  border-radius: 50%;
+  background: var(--el-color-primary);
+  opacity: 0.5;
+  animation: typing-bounce 1.4s infinite ease-in-out;
+}
+
+.typing-dots span:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.typing-dots span:nth-child(3) {
+  animation-delay: 0.4s;
 }
 
 @keyframes spin {
@@ -979,25 +1182,44 @@ onMounted(() => {
   justify-content: center;
   text-align: center;
   color: #888;
-  background: rgba(255, 255, 255, 0.7);
-  border-radius: 14px;
-  margin: 2.5em auto 1.5em auto;
-  padding: 2.2em 1.5em 1.7em 1.5em;
-  max-width: 90%;
-  box-shadow: 0 2px 14px 0 rgba(64, 158, 255, 0.07);
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.92), rgba(242, 248, 255, 0.92));
+  border-radius: 18px;
+  margin: 2.5em auto 1.25em auto;
+  padding: 2.4em 1.8em 2em 1.8em;
+  max-width: min(640px, 92%);
+  box-shadow: 0 22px 60px rgba(15, 23, 42, 0.08);
+  border: 1px solid rgba(64, 158, 255, 0.16);
+  position: relative;
+  overflow: hidden;
+}
+
+.ai-initial-message::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle at 20% 20%, rgba(64, 158, 255, 0.12), transparent 55%),
+    radial-gradient(circle at 80% 0%, rgba(110, 191, 255, 0.2), transparent 45%);
+  opacity: 0.8;
+  pointer-events: none;
+}
+
+.ai-initial-message > * {
+  position: relative;
+  z-index: 1;
 }
 
 .ai-initial-title {
-  font-size: 1.15em;
+  font-size: 1.35em;
   font-weight: 600;
-  margin-bottom: 0.5em;
+  margin-bottom: 0.75em;
+  color: #0f172a;
 }
 
 .ai-initial-desc {
-  font-size: 1em;
-  color: #666;
+  font-size: 1.05em;
+  color: #4b5563;
   margin-top: 0.2em;
-  line-height: 1.7;
+  line-height: 1.8;
 }
 
 .bubble-content h1,
@@ -1217,39 +1439,42 @@ onMounted(() => {
 }
 
 .ai-suggestions {
-  margin-top: 1.5em;
+  margin-top: 2em;
+  width: 100%;
 }
 
 .suggestions-container {
   display: flex;
+  flex-direction: row;
   flex-wrap: wrap;
-  gap: 0.75em;
-  max-width: 90%;
-  margin: 0 auto;
-  justify-content: center;
+  gap: 0.5em;
+  width: 100%;
+  justify-content: flex-start;
 }
 
 .suggestion-item {
-  font-size: 80%;
-  display: flex;
+  font-size: 0.85em;
+  display: inline-flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0.3em 0.5em;
-  background: rgba(255, 255, 255, 0.9);
-  border: 1px solid var(--el-border-color-light);
+  padding: 0.2em 0.1em;
+  background: rgba(255, 255, 255, 0.95);
+  border: 1px solid rgba(64, 158, 255, 0.18);
   border-radius: 12px;
   cursor: pointer;
   transition: all 0.2s ease;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.03);
-  min-width: 120px;
-  max-width: 100%;
+  min-width: 0;
+  max-width: none;
   overflow: hidden;
   position: relative;
+  flex: 0 1 auto;
+  font-size: 75%;
 }
 
 .suggestion-item:hover {
-  background: var(--el-color-primary-light-9);
-  border-color: var(--el-color-primary-light-5);
+  background: rgba(64, 158, 255, 0.08);
+  border-color: rgba(64, 158, 255, 0.5);
   transform: translateY(-2px);
   box-shadow: 0 4px 12px rgba(64, 158, 255, 0.15);
 }
@@ -1271,12 +1496,20 @@ onMounted(() => {
 
 .suggestion-icon {
   color: var(--el-color-primary);
-  font-size: 1em;
+  font-size: 0.9em;
   flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  border-radius: 9px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, rgba(64, 158, 255, 0.18), rgba(110, 191, 255, 0.22));
+  box-shadow: inset 0 0 0 1px rgba(64, 158, 255, 0.35);
 }
 
 .suggestion-text {
-  font-size: 0.95em;
+  font-size: 0.9em;
   color: var(--el-text-color-primary);
   white-space: nowrap;
   overflow: hidden;
@@ -1335,11 +1568,10 @@ onMounted(() => {
 .suggestion-item:nth-child(6) { animation-delay: 0.6s; }
 
 .empty-chat .ai-suggestions {
-  margin-top: 1.5em;
-  margin-bottom: 0;
-  position: absolute;
-  inset-inline: 0;
-  inset-block-end: 20%;
+  margin-top: 2em;
+  margin-bottom: 2.5em;
+  position: relative;
+  inset: auto;
   z-index: 1;
 }
 
@@ -1363,7 +1595,7 @@ onMounted(() => {
   }
   
   .empty-chat .ai-suggestions {
-    inset-block-end: 25%;
+    margin-bottom: 2em;
   }
 }
 </style>

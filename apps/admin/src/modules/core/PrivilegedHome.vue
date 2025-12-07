@@ -121,7 +121,7 @@
       <el-tab-pane name="integrations" :label="$t('Integrations')">
         <WorkflowsView />
 
-    <IntegrationFormModal :visible="($route.query.mode === 'edit' && !!editingIntegration)"
+    <IntegrationFormModal :visible="$route.query.mode === 'create' || ($route.query.mode === 'edit' && !!editingIntegration)"
       :editing-integration="editingIntegration"
       @close="closeIntegrationFormModal" />
       </el-tab-pane>
@@ -599,6 +599,7 @@ footer {
 .palette-header h3 {
   margin: 0 0 5px;
   font-size: 16px;
+  color: black;
 }
 
 .palette-description {

@@ -4,6 +4,7 @@ import { IAuthStore } from './types/auth-store'
 import { IUser } from './types/user'
 
 const runIdle = typeof window["requestIdleCallback"] === "function" ? requestIdleCallback : setTimeout;
+const ADMIN_DATA_SCOPE_KEY = 'adminLoadingDataAsUser';
 
 export const authStore = reactive<IAuthStore>({
   user: null,
@@ -15,20 +16,27 @@ export const isAdmin = computed(() => !!(authStore.user && authStore.user.roles.
 export const isPrivilegedUser = computed(() => !!(isAdmin.value || authStore.user?.roles.includes('editor')));
 export const isEditingEnabled = ref<boolean>(false);
 export const isManagingEnabled = ref<boolean>(false);
+export const isLoadingDataAsUser = ref<boolean>(true);
 
 function handleAdminFeatures() {
   if (isAdmin.value) {
     isEditingEnabled.value = localStorage.getItem('adminEditingEnabled') === 'true';
     isManagingEnabled.value = localStorage.getItem('adminManagingEnabled') === 'true';
+    const persistedDataScope = localStorage.getItem(ADMIN_DATA_SCOPE_KEY);
+    isLoadingDataAsUser.value = persistedDataScope !== 'false';
     watch(isEditingEnabled, (newVal: boolean) => {
       runIdle(() => localStorage.setItem('adminEditingEnabled', newVal.toString()))
     });
     watch(isManagingEnabled, (newVal: boolean) => {
       runIdle(() => localStorage.setItem('adminManagingEnabled', newVal.toString()))
     });
+    watch(isLoadingDataAsUser, (newVal: boolean) => {
+      runIdle(() => localStorage.setItem(ADMIN_DATA_SCOPE_KEY, newVal.toString()))
+    });
   } else {
     isEditingEnabled.value = false;
     isManagingEnabled.value = false;
+    isLoadingDataAsUser.value = true;
   }
 }
 function loadUser() {
